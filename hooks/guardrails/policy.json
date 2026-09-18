@@ -1,0 +1,234 @@
+{
+  "_comment": "Single source of truth for harness guardrails. Deny-only: Codex 0.148 cannot rewrite a command (updatedInput is unreachable), so every rule blocks and explains instead of correcting. Matching is argv-head based, never substring, so the banned word appearing inside a document body does not trip a rule. Rules are only as strong as the matcher in guard.py; see its docstring. Paths and host names here are the ones for the example estate in the README; edit them to match yours.",
+  "version": 2,
+  "skill_roots": [
+    "/home/ops/.codex/skills/",
+    "/home/ops/.agents/skills/",
+    "/home/ops/.claude/skills/",
+    "/mnt/lab/harness/skills/",
+    "/srv/agents-data/harness/skills/"
+  ],
+  "readonly_argv0": [
+    "sed",
+    "cat",
+    "head",
+    "tail",
+    "grep",
+    "rg",
+    "awk",
+    "wc",
+    "ls",
+    "stat",
+    "file",
+    "md5sum",
+    "sha256sum",
+    "find",
+    "realpath",
+    "readlink",
+    "du",
+    "diff"
+  ],
+  "wrappers": [
+    "sudo",
+    "nice",
+    "ionice",
+    "timeout",
+    "env",
+    "nohup",
+    "command",
+    "stdbuf",
+    "setsid",
+    "doas",
+    "chrt",
+    "taskset",
+    "time",
+    "busybox"
+  ],
+  "rules": [
+    {
+      "id": "teleport-only",
+      "kind": "argv0",
+      "argv0": [
+        "ssh",
+        "scp",
+        "sftp",
+        "sshpass",
+        "ssh-copy-id"
+      ],
+      "message": "BLOCKED (teleport-only): direct SSH is banned on this estate. Use `tsh ssh ops-agent@<node>` to run a command, or `tsh scp` to copy a file. Nodes: hv-1, hv-2, workstation-a, workstation-b, console, and the *-win variants. If `tsh` reports an expired certificate, stop and tell the operator to run `tsh login`. There is no workaround."
+    },
+    {
+      "id": "destructive-storage",
+      "kind": "argv0",
+      "argv0": [
+        "mkfs",
+        "mkfs.ext4",
+        "mkfs.xfs",
+        "mkfs.btrfs",
+        "mkfs.vfat",
+        "mkfs.fat",
+        "mkfs.ntfs",
+        "sgdisk",
+        "sfdisk",
+        "fdisk",
+        "cfdisk",
+        "parted",
+        "wipefs",
+        "ntfsresize",
+        "blkdiscard",
+        "shred",
+        "cryptsetup",
+        "mkswap",
+        "pvremove",
+        "vgremove",
+        "lvremove"
+      ],
+      "message": "BLOCKED (destructive-storage): commands that write a partition table or a raw block device belong to the operator, not to an agent. Report what you believe needs doing and let the operator run it."
+    },
+    {
+      "id": "dd-to-device",
+      "kind": "regex",
+      "argv0": [
+        "dd"
+      ],
+      "pattern": "(^|\\s)of=/dev/",
+      "message": "BLOCKED (destructive-storage): `dd` writing to a block device belongs to the operator. Reading from a device (`if=/dev/...`) is fine; writing is not."
+    },
+    {
+      "id": "raw-device-write",
+      "kind": "path",
+      "argv0": null,
+      "paths": [
+        "/dev/sd",
+        "/dev/nvme",
+        "/dev/vd",
+        "/dev/hd",
+        "/dev/mmcblk",
+        "/dev/loop",
+        "/dev/mapper"
+      ],
+      "also_check_redirects": true,
+      "message": "BLOCKED (destructive-storage): naming a raw block device as a write target belongs to the operator. This covers redirects and `tee` as well as `dd`. Reading a device is fine.",
+      "allow_readonly": true
+    },
+    {
+      "id": "btrfs-device-delete",
+      "kind": "regex",
+      "argv0": [
+        "btrfs"
+      ],
+      "pattern": "device\\s+(delete|remove)",
+      "message": "BLOCKED (destructive-storage): `btrfs device delete` belongs to the operator."
+    },
+    {
+      "id": "efi-entry-delete",
+      "kind": "regex",
+      "argv0": [
+        "efibootmgr"
+      ],
+      "pattern": "(^|\\s)-B(\\s|$)|--delete-bootnum",
+      "message": "BLOCKED (destructive-storage): deleting an EFI boot entry belongs to the operator. `efibootmgr` without -B (listing) is allowed."
+    },
+    {
+      "id": "media-drives",
+      "kind": "path",
+      "argv0": [
+        "rm",
+        "rmdir",
+        "mv",
+        "dd",
+        "shred",
+        "truncate",
+        "tee",
+        "chmod",
+        "chown",
+        "install",
+        "cp",
+        "rsync",
+        "ffmpeg",
+        "tar",
+        "unzip",
+        "ln",
+        "unlink",
+        "gzip",
+        "gunzip",
+        "zip",
+        "7z",
+        "mkdir",
+        "touch",
+        "mkfifo"
+      ],
+      "paths": [
+        "/mnt/media"
+      ],
+      "input_flags": true,
+      "also_check_redirects": true,
+      "message": "BLOCKED (media-drives): nothing under /mnt/media* is ever deleted or overwritten. This is an absolute rule. Transcodes and conversions read from there and write NEW files to a different destination."
+    },
+    {
+      "id": "media-find-exec",
+      "kind": "regex",
+      "argv0": [
+        "find"
+      ],
+      "pattern": "(^|\\s)-(delete|exec|execdir|ok)(\\s|$)",
+      "require_path": [
+        "/mnt/media"
+      ],
+      "message": "BLOCKED (media-drives): `find ... -delete` / `-exec` under /mnt/media* is a deletion path. Listing is allowed; acting on the results is not."
+    },
+    {
+      "id": "secrets",
+      "kind": "path",
+      "argv0": null,
+      "paths": [
+        "/var/lib/secret-broker/secrets",
+        "/etc/secret-broker.conf",
+        "/mnt/lab/secrets",
+        "/home/ops/.ssh/id_",
+        "/root/.ssh/id_",
+        "/home/ops/.config/sops/age",
+        "/home/ops/.ssh/",
+        "/root/.ssh/",
+        "/home/ops/.config/sops/"
+      ],
+      "allow_argv0": [
+        "sops"
+      ],
+      "match_substring": true,
+      "also_check_redirects": true,
+      "_paths_note": "An entry ending in / protects the directory as a whole (the dir itself or dir/*); an entry without protects every path under that prefix.",
+      "message": "BLOCKED (secrets): secret material is never read into a transcript. Use the credential broker (`sudo -n -u broker secret-broker-run ...`), which passes the secret to the child process without exposing it, or SOPS for encrypted files. Never print, copy, or commit a secret value."
+    },
+    {
+      "id": "rm-root",
+      "kind": "regex",
+      "argv0": [
+        "rm"
+      ],
+      "pattern": "-[a-zA-Z]*[rR][a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*[rR]",
+      "require_arg_regex": "^(/|~|\\$HOME|/home/ops|/etc|/usr|/usr/local|/var|/opt|/mnt|/srv|/boot|/home)/?\\*?$",
+      "message": "BLOCKED (rm-root): recursive force-delete of a filesystem root, a top-level directory, or a glob directly beneath one. If you meant a specific subdirectory, name it explicitly."
+    },
+    {
+      "id": "proxmox-mutate",
+      "kind": "regex",
+      "argv0": [
+        "pct",
+        "qm"
+      ],
+      "pattern": "(^|\\s)(pct|qm)\\s+(start|stop|shutdown|reboot|reset|suspend|resume|destroy|create|restore|clone|migrate|move[-_]?disk|move[-_]?volume|resize|set|rollback|snapshot|delsnapshot|template|unlock|push|pull|mount|unmount|fsck|fstrim|swap|disk|cloudinit)\\b",
+      "message": "BLOCKED (proxmox-mutate): changing container or VM state needs explicit operator confirmation, whether it runs locally or inside a `tsh ssh` remote command. This rule exists because a subagent briefed for read-only reconnaissance ran `sudo pct start 907 2>/dev/null; true` and started a container whose static IP collided with a running one. Read-only inspection is still available: `pct config`, `pct list`, `pct status`, `qm config`, `qm list`, `qm status`. To change state, say what you want changed and why, and let the operator confirm it."
+    },
+    {
+      "id": "forced-success-probe",
+      "kind": "regex",
+      "argv0": null,
+      "pattern": "2>\\s*(&1\\s*>\\s*)?/dev/null[\\s\\S]{0,200}?(;\\s*(true|exit\\s+0)\\b|\\|\\|\\s*(true|:)\\s*(;|$))",
+      "message": "BLOCKED (forced-success-probe): this command discards stderr and then forces a success status, so a failure, or a state change you did not intend, leaves no trace in the transcript. That combination is what hid the container-907 incident. Suppressing stderr on its own is fine, and so is `|| true` on its own; using both together is not. Run the command plainly and read the error."
+    }
+  ],
+  "messages": {
+    "indirect-dispatch": "BLOCKED (indirect-dispatch): the command name comes from a shell variable or an unexpanded substitution, so the guard cannot see what would actually run. Write the command out literally."
+  }
+}
